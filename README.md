@@ -1,35 +1,34 @@
 # Mask R-CNN 和 Sparse R-CNN 在VOC数据集上的训练与测试
 
 本项目实现了在PASCAL VOC数据集上训练和测试Mask R-CNN和Sparse R-CNN模型的完整流程。
+## 模型权重
+
+[谷歌网盘链接](https://drive.google.com/drive/folders/1PfcBwBqGlIkflY6u8-dKb5wdqperToaN?usp=sharing)
 
 ## 项目概述
 
 本项目满足以下要求：
-1. 使用MMDetection框架在VOC数据集上训练Mask R-CNN和Sparse R-CNN
+1. 使用MMDetection框架在VOC数据集上训练Mask R-CNN和Sparse R-CNN(实现了 VOC mask数据转coco)
 2. 可视化对比Mask R-CNN的proposal box和最终预测结果
-3. 对比两个模型的实例分割与目标检测结果
-4. 在外部图像上测试模型的泛化能力
+3. 在外部图像上测试模型的泛化能力
 
 ## 项目结构
 
 ```
-mmdetection/
-├── README.md                    # 项目说明文档
-├── run_experiment.py           # 主运行脚本
-├── setup_environment.py       # 环境设置脚本
-├── train_models.py            # 模型训练脚本
-├── visualize_results.py       # 结果可视化脚本
-├── sparse_rcnn_config.py      # Sparse R-CNN配置文件
-├── configs/                   # 配置文件目录
-│   └── mask_rcnn_voc.py      # Mask R-CNN配置文件
+rcnn/
+├── README.md                  # 项目说明文档
+├── train_rcnn.sh              # 主运行脚本
+├── vis.sh                     # 结果可视化脚本
+├── configs                   # 配置文件目录
 ├── data/                      # 数据集目录
-│   └── VOCdevkit/            # VOC数据集
+│   ├── VOCdevkit/             # VOC数据集
+│   └── coco/                  # VOC seg 转coco annotation 数据集
 ├── work_dirs/                 # 训练输出目录
 │   ├── mask_rcnn/            # Mask R-CNN训练结果
 │   └── sparse_rcnn/          # Sparse R-CNN训练结果
 ├── visualizations/            # 可视化结果目录
-├── results/                   # 测试结果目录
-└── external_images/           # 外部测试图像
+│   ├── mask_rcnn/            # Mask R-CNN训练结果
+│   └── sparse_rcnn/          # Sparse R-CNN训练结果
 ```
 
 ## 环境要求
@@ -37,6 +36,7 @@ mmdetection/
 - Python 3.7+
 - PyTorch 1.8+
 - CUDA（推荐，用于GPU训练）
+- mmdet
 - 足够的存储空间（VOC数据集约2GB，训练模型约1GB）
 
 ## 快速开始
@@ -45,10 +45,10 @@ mmdetection/
 
 ```bash
 # 进入项目目录
-cd mmdetection
+cd rcnn
 
 # 运行完整实验（包括环境设置、训练、测试、可视化）
-python run_experiment.py
+`bash train_rcnn.sh`
 
 # 或者只训练特定模型
 python run_experiment.py --model mask_rcnn
