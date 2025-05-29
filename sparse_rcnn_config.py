@@ -1,0 +1,253 @@
+# Sparse R-CNN配置文件 - VOC2012数据集
+
+# 导入自定义钩子
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from custom_hooks import CustomLoggerHook, TensorboardLoggerHook
+
+_base_ = [
+    'mmdetection_repo/configs/_base_/schedules/schedule_1x.py',
+    'mmdetection_repo/configs/_base_/default_runtime.py'
+]
+
+# 模型配置
+model = dict(
+    type='SparseRCNN',
+    data_preprocessor=dict(
+        type='DetDataPreprocessor',
+        mean=[123.675, 116.28, 103.53],
+        std=[58.395, 57.12, 57.375],
+        bgr_to_rgb=True,
+        pad_size_divisor=32),
+    backbone=dict(
+        type='ResNet',
+        depth=50,
+        num_stages=4,
+        out_indices=(0, 1, 2, 3),
+        frozen_stages=1,
+        norm_cfg=dict(type='BN', requires_grad=True),
+        norm_eval=True,
+        style='pytorch',
+        init_cfg=dict(type='Pretrained', checkpoint='pretrain/resnet50-0676ba61.pth')),  # 使用本地权重
+    neck=dict(
+        type='FPN',
+        in_channels=[256, 512, 1024, 2048],
+        out_channels=256,
+        start_level=0,
+        add_extra_convs='on_input',
+        num_outs=4),
+    rpn_head=dict(
+        type='EmbeddingRPNHead',
+        num_proposals=100,
+        proposal_feature_channel=256),
+    roi_head=dict(
+        type='SparseRoIHead',
+        num_stages=6,
+        stage_loss_weights=[1] * 6,
+        proposal_feature_channel=256,
+        bbox_roi_extractor=dict(
+            type='SingleRoIExtractor',
+            roi_layer=dict(type='RoIAlign', output_size=7, sampling_ratio=2),
+            out_channels=256,
+            featmap_strides=[4, 8, 16, 32]),
+        bbox_head=[
+            dict(
+                type='DIIHead',
+                num_classes=20,  # VOC有20个类别
+                num_ffn_fcs=2,
+                num_heads=8,
+                num_cls_fcs=1,
+                num_reg_fcs=3,
+                feedforward_channels=2048,
+                in_channels=256,
+                dropout=0.0,
+                ffn_act_cfg=dict(type='ReLU', inplace=True),
+                dynamic_conv_cfg=dict(
+                    type='DynamicConv',
+                    in_channels=256,
+                    feat_channels=64,
+                    out_channels=256,
+                    input_feat_shape=7,
+                    act_cfg=dict(type='ReLU', inplace=True),
+                    norm_cfg=dict(type='LN')),
+                loss_bbox=dict(type='L1Loss', loss_weight=5.0),
+                loss_iou=dict(type='GIoULoss', loss_weight=2.0),
+                loss_cls=dict(
+                    type='FocalLoss',
+                    use_sigmoid=True,
+                    gamma=2.0,
+                    alpha=0.25,
+                    loss_weight=2.0),
+                bbox_coder=dict(
+                    type='DeltaXYWHBBoxCoder',
+                    clip_border=False,
+                    target_means=[0., 0., 0., 0.],
+                    target_stds=[0.5, 0.5, 1., 1.])) for _ in range(6)
+        ]),
+    # 训练配置
+    train_cfg=dict(
+        rpn=None,
+        rcnn=[
+            dict(
+                assigner=dict(
+                    type='HungarianAssigner',
+                    match_costs=[
+                        dict(type='FocalLossCost', weight=2.0),
+                        dict(type='BBoxL1Cost', weight=5.0, box_format='xyxy'),
+                        dict(type='IoUCost', iou_mode='giou', weight=2.0)
+                    ]),
+                sampler=dict(type='PseudoSampler'),
+                pos_weight=1) for _ in range(6)
+        ]),
+    # 测试配置
+    test_cfg=dict(rpn=None, rcnn=dict(max_per_img=100)))
+
+# 数据集配置 - 使用VOC2012
+dataset_type = 'VOCDataset'
+data_root = 'data/VOCdevkit/'
+
+# 数据处理管道
+train_pipeline = [
+    dict(type='LoadImageFromFile', backend_args=None),
+    dict(type='LoadAnnotations', with_bbox=True),
+    dict(
+        type='RandomChoiceResize',
+        scales=[(1333, 640), (1333, 672), (1333, 704), (1333, 736),
+               (1333, 768), (1333, 800)],
+        keep_ratio=True),
+    dict(type='RandomFlip', prob=0.5),
+    dict(type='PackDetInputs')
+]
+
+test_pipeline = [
+    dict(type='LoadImageFromFile', backend_args=None),
+    dict(type='Resize', scale=(1333, 800), keep_ratio=True),
+    dict(type='LoadAnnotations', with_bbox=True),
+    dict(
+        type='PackDetInputs',
+        meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape', 'scale_factor')
+    )
+]
+
+# 数据加载器配置 - 使用VOC2012，8卡分布式训练，每卡batch_size=2，总batch_size=16
+train_dataloader = dict(
+    batch_size=2,
+    num_workers=2,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=True),
+    batch_sampler=dict(type='AspectRatioBatchSampler'),
+    dataset=dict(
+        type=dataset_type,
+        data_root=data_root,
+        ann_file='VOC2012/ImageSets/Main/train.txt',  # 使用VOC2012训练集
+        data_prefix=dict(sub_data_root='VOC2012/'),
+        filter_cfg=dict(filter_empty_gt=True, min_size=32),
+        pipeline=train_pipeline,
+        backend_args=None
+    )
+)
+
+val_dataloader = dict(
+    batch_size=1,
+    num_workers=2,
+    persistent_workers=True,
+    drop_last=False,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(
+        type=dataset_type,
+        data_root=data_root,
+        ann_file='VOC2012/ImageSets/Main/val.txt',  # 使用VOC2012验证集
+        data_prefix=dict(sub_data_root='VOC2012/'),
+        test_mode=True,
+        pipeline=test_pipeline,
+        backend_args=None
+    )
+)
+
+test_dataloader = val_dataloader
+
+# 评估器配置
+val_evaluator = dict(type='VOCMetric', metric='mAP', eval_mode='11points')
+test_evaluator = val_evaluator
+
+# 优化器配置 - 适配8卡训练，40个epoch
+optim_wrapper = dict(
+    type='OptimWrapper',
+    optimizer=dict(
+        _delete_=True,  # 删除基础配置中的优化器设置
+        type='AdamW',
+        lr=2.5e-05 * 8,  # 8卡训练，学习率线性缩放
+        weight_decay=0.0001),
+    paramwise_cfg=dict(
+        custom_keys={'backbone': dict(lr_mult=0.1, decay_mult=1.0)}),
+    clip_grad=dict(max_norm=0.1, norm_type=2)
+)
+
+# 学习率调度 - 适配400个epoch
+param_scheduler = [
+    dict(
+        type='LinearLR', start_factor=0.001, by_epoch=False, begin=0, end=500),
+    dict(
+        type='MultiStepLR',
+        begin=0,
+        end=400,  # 训练400个epoch
+        by_epoch=True,
+        milestones=[300, 370],  # 在300和370个epoch时降低学习率
+        gamma=0.1)
+]
+
+# 训练配置 - 400个epoch，每个epoch验证
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=400, val_interval=1)
+val_cfg = dict(type='ValLoop')
+test_cfg = dict(type='TestLoop')
+
+# 默认钩子 - 基于验证mAP保存最佳模型
+default_hooks = dict(
+    timer=dict(type='IterTimerHook'),
+    logger=dict(type='LoggerHook', interval=50),
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    checkpoint=dict(
+        type='CheckpointHook', 
+        interval=1, 
+        save_best='auto',  # 自动保存最佳模型
+        rule='greater'  # mAP越大越好
+    ),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
+    visualization=dict(type='DetVisualizationHook'))
+
+# 环境配置
+env_cfg = dict(
+    cudnn_benchmark=False,
+    mp_cfg=dict(mp_start_method='fork', opencv_num_threads=0),
+    dist_cfg=dict(backend='nccl'))
+
+# 可视化配置 - 添加分离的Tensorboard支持
+vis_backends = [
+    dict(type='LocalVisBackend'),
+    dict(
+        type='TensorboardVisBackend',
+        save_dir='work_dirs/sparse_rcnn/tensorboard_logs'
+    )
+]
+visualizer = dict(
+    type='DetLocalVisualizer', 
+    vis_backends=vis_backends, 
+    name='visualizer')
+
+# 自定义钩子 - 分离记录训练loss、验证loss、验证mAP
+custom_hooks = [
+    dict(
+        type='CustomLoggerHook',
+        log_metric_by_epoch=True,
+        log_train_loss=True,
+        log_val_loss=True,
+        log_val_map=True
+    )
+]
+
+# 日志配置
+log_processor = dict(type='LogProcessor', window_size=50, by_epoch=True)
+log_level = 'INFO'
+load_from = None
+resume = False 
